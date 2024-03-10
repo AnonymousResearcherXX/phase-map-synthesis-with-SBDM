@@ -10,7 +10,6 @@ import numpy as np
 from pathlib import Path
 import sys
 from typing import Sequence, Dict
-from data import CardiacDataset
 import os
 import sys 
 #from data.utils import log
@@ -32,118 +31,8 @@ from DiffusionMBIR.models import ncsnpp
 directory = os.path.dirname(os.path.abspath("__file__"))
 # setting path
 sys.path.append(directory)
-#from configs.ve.cardiac_128_ncsnpp_continuous import get_config
 #from configs.ve.knee_320_ncsnpp_continuous import get_config 
 from configs.ve.brain_256_ncsnpp_continuous import get_config 
-
-
-
-
-def generate_synthetic_phase_c(dataset, config, ckpt_path, logger):
-
-        def get_batch(mag_path: Path, phase_path: Path) -> torch.tensor:
-            mag_img_paths = sorted(list(mag_path.glob("*.npy")), key=lambda x: int(re.findall(r'\d+', str(x.name))[0]))
-            phase_img_paths = sorted(list(phase_path.glob("*.npy")), key=lambda x: int(re.findall(r'\d+', str(x.name))[0]))
-            assert len(mag_img_paths) == len(phase_img_paths)
-            num_slices = len(mag_img_paths)
-            # Initialize volumes/batches for phase sampling
-            mag_batch = torch.zeros((num_slices, 1, config.data.image_size, config.data.image_size), dtype=torch.float32)
-            phase_batch = torch.zeros_like(mag_batch)
-            # Start loading data 
-            for i in range(num_slices):
-                mag_img = torch.from_numpy(np.load(mag_img_paths[i]))
-                phase_img = torch.from_numpy(np.load(phase_img_paths[i]))
-                mag_img, phase_img = dataset.transform(mag_img, phase_img)
-                mag_batch[i,...], phase_batch[i,...] = mag_img, phase_img
-
-            return mag_batch, phase_batch
-
-        def save_batch(path: Path, sample: torch.tensor) -> None:
-            num_slices = sample.shape[0]
-            numpy_sample = sample.detach().cpu().numpy()
-            for k in range(num_slices):
-                img = numpy_sample[k,0]
-                np.save(path / f"slice{k+1}.npy", img)
-
-
-        # No augmentation on new dataset 
-        dataset.augmentation=False 
-
-        # Initialize a diffusion model 
-        score_model = mutils.create_model(config)
-        ema = ExponentialMovingAverage(score_model.parameters(), decay=config.model.ema_rate)
-        optimizer = losses.get_optimizer(config, score_model.parameters())
-        state = dict(optimizer=optimizer, model=score_model, ema=ema, step=0)    
-        
-        # Setup SDEs
-        if config.training.sde.lower() == 'vpsde':
-            sde = sde_lib.VPSDE(beta_min=config.model.beta_min, beta_max=config.model.beta_max, N=config.model.num_scales)
-            sampling_eps = 1e-3
-        elif config.training.sde.lower() == 'subvpsde':
-            sde = sde_lib.subVPSDE(beta_min=config.model.beta_min, beta_max=config.model.beta_max, N=config.model.num_scales)
-            sampling_eps = 1e-3
-        elif config.training.sde.lower() == 'vesde':
-            sde = sde_lib.VESDE(sigma_min=config.model.sigma_min, sigma_max=config.model.sigma_max, N=config.model.num_scales)
-            sampling_eps = 1e-5
-        else:
-            raise NotImplementedError(f"SDE {config.training.sde} unknown.")
-        
-        # Load the checkpoint 
-        state = restore_checkpoint(ckpt_path, state, device=config.device)
-        ema.copy_to(score_model.parameters())
-        logger.info(f"Model is loaded from {ckpt_path}")
-
-        get_new_path = lambda old_path : Path(str(old_path).replace("phase", "synthetic_phase_3D"))
-
-        # Create data normalizer and its inverse
-        scaler = datasets.get_data_scaler(config)
-        inverse_scaler = datasets.get_data_inverse_scaler(config)
-
-        for patient_no, path in enumerate(dataset.patient_list, 1):
-            patient_path = Path(path[1:])
-            logger.info(f"Patient No: {patient_no}/{len(dataset.patient_list)}")
-            logger.info(f"Patient Name: {patient_path.name}")
-            logger.info("#"*20)
-            scan_path_list = list(patient_path.glob("*"))
-            for scan_no, scan_path in enumerate(scan_path_list, 1):
-                logger.info(f"Scan No: {scan_no}/{len(scan_path_list)}")
-                logger.info(f"Scan Name: {scan_path.name}")
-                logger.info(f"-"*20)
-                # Save original magnitude images 
-                mag_paths = sorted(list(scan_path.glob("magnitude?")), key=lambda x: int(re.findall(r'\d+', str(x.name))[0]))
-                phase_paths = sorted(list(scan_path.glob("phase?")), key=lambda x: int(re.findall(r'\d+', str(x.name))[0]))
-
-                # Loop for slices of the same patient 
-                for slice_no in range(len(mag_paths)):
-                    logger.info(f"Slice No: {slice_no+1}/{len(mag_paths)}")
-                    # Get PyTorch batches 
-                    mag_path, phase_path = mag_paths[slice_no], phase_paths[slice_no]
-                    # New save path 
-                    syn_phase_path = get_new_path(phase_path)
-                    if os.path.exists(syn_phase_path):
-                        continue
-                    mag_batch, phase_batch = get_batch(mag_path, phase_path)
-                    # Building the sampling function
-                    sampling_shape = (mag_batch.shape[0], config.data.num_channels - 1,
-                                        config.data.image_size, config.data.image_size)
-                    sampling_fn = sampling.get_sampling_fn(config, sde, sampling_shape, inverse_scaler, sampling_eps)
-                    ## Sampling
-                    # Scale images
-                    mag_batch = scaler(mag_batch.to(config.device))
-                    phase_batch = scaler(phase_batch.to(config.device))
-                    # Generate synthetic phase images and save them 
-                    ema.store(score_model.parameters())
-                    ema.copy_to(score_model.parameters())
-                    # add frame indices 
-                    frame_no = torch.arange(len(mag_batch)).to(config.device)
-                    sample, n = sampling_fn(score_model, mag_batch, frame_no=frame_no)  
-                    ema.restore(score_model.parameters())      
-                    # Save the sample 
-                    if not syn_phase_path.exists(): syn_phase_path.mkdir(parents=True)
-                    save_batch(syn_phase_path, sample)
-                logger.info("-"*20)
-            logger.info("#"*20)
-        logger.info("Synthetic phase images were generated succesfully!")
 
 def generate_synthetic_phase_k(patient_dict, config, ckpt_path, logger, save_dir):
 
@@ -411,7 +300,7 @@ def update_dict(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--log_name", default="logs", type=str, help="directory for the log file")
-    parser.add_argument("--data_type", default="knee", type=str, choices=("knee", "cardiac", "brain"), help="type of the dataset (knee or cardiac)")
+    parser.add_argument("--data_type", default="knee", type=str, choices=("knee", "brain"), help="type of the dataset (knee or brain)")
     args = parser.parse_args()
 
     # for reproducible results (important for train and test split)
@@ -445,55 +334,4 @@ if __name__ == "__main__":
         save_dir = Path("BrainMRI/gen_test_data")
         generate_synthetic_phase_b(patient_dict, config, ckpt_path, logging, save_dir)
     else:
-        # dictonary paths
-        train_path = Path("data/split_dict/train_dict.pkl")
-        val_path = Path("data/split_dict/val_dict.pkl")
-        test_path = Path("data/split_dict/test_dict.pkl")
-        # checkpoint path
-        ckpt_path = Path("cardiac_info_3D/checkpoints/checkpoint_99.pth")
-        _, _, test_dict = load_dicts(train_path, val_path, test_path)
-
-        # Generate synthetic images for whole dataset. 
-        #data_dict = {"magnitude": {"path": [], "scan": []}, "phase":{"path":[], "scan":[]}}
-        #data_dict = update_dict(data_dict, train_dict)
-        #data_dict = update_dict(data_dict, val_dict)
-        #data_dict = update_dict(data_dict, test_dict)
-
-        # Get the same train-val-test split with the diffusion model
-        dataset = CardiacDataset(data_dict=test_dict)
-        # Generate synthetic data
-        generate_synthetic_phase_c(dataset, config, ckpt_path, logger)
-
-
-
-"""
-CONFIGURING DICTIONARIES
-# load original train-test dictionary 
-        with open("KneeMRI/org_train_dict.pkl", "rb") as file:
-            org_train_dict = pickle.load(file)
-        with open("KneeMRI/org_val_dict.pkl", "rb") as file:
-            org_test_dict = pickle.load(file)
-        print("Org. Train patient size:", len(org_train_dict.keys()))
-        print("Org. Test patient size:", len(org_test_dict.keys()))
-        # load our train-val split 
-        with open("KneeMRI/train_val_test_dicts/train_dict.pkl", "rb") as file:
-            train_dict = pickle.load(file)
-        with open("KneeMRI/train_val_test_dicts/val_dict.pkl", "rb") as file:
-            val_dict = pickle.load(file)
-        print("Train patient size:", len(train_dict.keys()))
-        print("Val. patient size:", len(val_dict.keys()))
-        # combine the dictionaries 
-        # create the new test dictionary to be used for VarNet and other evaluation criteria
-        for key, value in org_train_dict.items():
-            if key not in train_dict.keys() and key not in val_dict.keys():
-                if key not in org_test_dict.keys():
-                    org_test_dict[key] = value
-                else:
-                    print("PROBLEM, SAME PATIENT!")
-        print("Final dictionaries:")
-        print("Train size:", len(train_dict.keys()))
-        print("Val size:", len(val_dict.keys()))
-        print("Test size:", len(org_test_dict.keys()))
-        with open("KneeMRI/train_val_test_dicts/test_dict.pkl", "wb") as file:
-            pickle.dump(org_test_dict, file)
-"""
+        raise ValueError(f"Unknown data type: {args.data_type}".)
