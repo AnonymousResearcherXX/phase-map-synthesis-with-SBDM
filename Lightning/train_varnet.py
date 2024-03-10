@@ -13,7 +13,7 @@ import torch
 import yaml
 
 from fastmri.data.subsample import create_mask_for_mask_type
-from pl_modules import VarNetModule, CardiacDataModule, KneeDataModule, CascadeNetModule, OCMRDataModule, BrainDataModule
+from pl_modules import VarNetModule, KneeDataModule, CascadeNetModule, BrainDataModule
 from data import VarNetDataTransform, CenterCrop, AffineTransform, HorizontalFlip, VerticalFlip, GaussianBlur, ElasticTransform
 #import torch.distributed as dist
 import pickle
@@ -36,36 +36,7 @@ def cli_main(args):
     )
     train_transform = val_transform = test_transform = None
     # ptl data module - this handles data loaders 
-    if args.dataset_type == 'cardiac':
-        # Set augmentations and transformations 
-        train_transform = tvt.Compose([
-        # Augmentations
-        HorizontalFlip(p=args.p_hflip),
-        #VerticalFlip(p=args.p_vflip),
-        #AffineTransform(args.angle, args.scale, args.shear),
-        GaussianBlur(args.p_blur, args.kernel_size, args.sigma),
-        CenterCrop(args.center_crop)
-        ])
-        val_transform = CenterCrop(args.center_crop)
-        test_transform = CenterCrop(args.center_crop)
-
-        data_module = CardiacDataModule(
-            data_path=args.data_path,
-            msk_fnc=mask,
-            batch_size=args.batch_size,
-            num_workers=args.num_workers,
-            distributed_sampler= "ddp", #(args.accelerator in ("ddp", "ddp_cpu"))
-            data_dict_path=args.data_dict_path,
-            phase_type=args.phase_type,
-            seed=args.seed,
-            train_transform=train_transform,
-            val_transform=val_transform,
-            test_transform=test_transform,
-            split=[17, 3],
-            cross_val=args.cv,
-            fold=args.fold_idx
-        )
-    elif args.dataset_type == "knee":
+    if args.dataset_type == "knee":
         data_module = KneeDataModule(
             train_dict=args.train_dict,
             val_dict=args.val_dict,
@@ -98,22 +69,6 @@ def cli_main(args):
             fold=args.fold_idx, 
             cross_val=args.cv,
             normalize_input=args.normalize_input
-        )
-    elif args.dataset_type == "ocmr":
-        data_module = OCMRDataModule(
-            dict_path=args.dict_path,
-            split=args.train_ratio,
-            msk_fnc=mask, 
-            batch_size=args.batch_size,
-            num_workers=args.num_workers,
-            distributed_sampler= "ddp", #(args.accelerator in ("ddp", "ddp_cpu"))
-            seed=args.seed, 
-            phase_type=args.phase_type,
-            train_transform=train_transform, 
-            val_transform=val_transform, 
-            test_transform=test_transform, 
-            fold=args.fold_idx, 
-            cross_val=args.cv
         )
     else:
         raise ValueError("Invalid dataset type!")
@@ -316,7 +271,7 @@ def build_args():
     parser.add_argument(
         "--dataset_type",
         default="brain",
-        choices=("cardiac", "knee", "ocmr", "brain"),
+        choices=("knee", "brain"),
         type=str,
         help="type of the dataset to be used for VarNet"
     )
@@ -554,28 +509,3 @@ if __name__ == "__main__":
     torch.autograd.set_detect_anomaly(True)
     print("GPU name:", torch.cuda.get_device_name())
     run_cli()
-
-
-
-
-
-# data config
-    """
-    parser = CardiacDataModule.add_data_specific_args(parser)
-    parser.set_defaults(
-        data_path=data_path,  # path to Cardiac
-        mask_type="equispaced",  # VarNet uses equispaced mask
-        challenge="singlecoil",  # only multicoil implemented for VarNet
-        batch_size=64,  # number of samples per batch
-        test_path=None # path for test split, overwrites data_path
-        )
-    
-    parser = OCMRDataModule.add_data_specific_args(parser)
-    parser.set_defaults(
-        dict_path=dict_path,  # path to Knee
-        mask_type="equispaced",  # VarNet uses equispaced mask
-        challenge="singlecoil",  # only multicoil implemented for VarNet
-        batch_size=1,  # number of samples per batch
-        test_path=None # path for test split, overwrites data_path
-    )
-    """
