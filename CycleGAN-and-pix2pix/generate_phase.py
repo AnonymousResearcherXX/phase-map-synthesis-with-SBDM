@@ -18,7 +18,6 @@ from options.test_options import TestOptions
 import sys 
 import random
 import pickle 
-from data import CardiacDataset
 from models.pix2pix_model import Pix2PixModel
 import argparse 
 import torchvision.transforms as tvt 
@@ -282,97 +281,12 @@ def generate_synthetic_phase(dataset, logger):
         logger.info("#"*20)
     logger.info("Synthetic phase images were generated succesfully!")    
 
-def generate_synthetic_phase_ocmr(args):
-
-    def get_batch(mag_path: Path, phase_path: Path) -> torch.tensor:
-        mag_img_paths = sorted(list(mag_path.glob("*.npy")), key=lambda x: int(re.findall(r'\d+', str(x.name))[0]))
-        phase_img_paths = sorted(list(phase_path.glob("*.npy")), key=lambda x: int(re.findall(r'\d+', str(x.name))[0]))
-        assert len(mag_img_paths) == len(phase_img_paths)
-        num_slices = len(mag_img_paths)
-        # Initialize volumes/batches for phase sampling
-        shape = np.load(mag_img_paths[0]).shape[-1]
-        mag_batch = torch.zeros((num_slices, 1, shape, shape), dtype=torch.float32)
-        phase_batch = torch.zeros_like(mag_batch)
-        # Start loading data 
-        for i in range(num_slices):
-            mag_img = torch.from_numpy(np.load(mag_img_paths[i]))
-            phase_img = torch.from_numpy(np.load(phase_img_paths[i]))
-            mag_batch[i,...], phase_batch[i,...] = mag_img, phase_img
-        print("Current shape: ", shape)
-        if shape == 96:
-            pad = tvt.Pad(padding=16)
-            mag_batch = pad(mag_batch)
-            phase_batch = pad(phase_batch)
-        elif shape == 160:
-            pad = tvt.Pad(padding=48)
-            mag_batch = pad(mag_batch)
-            phase_batch = pad(phase_batch)
-        elif shape == 120:
-            pad = tvt.Pad(padding=4)
-            mag_batch = pad(mag_batch)
-            phase_batch = pad(phase_batch)
-        return mag_batch, phase_batch, shape 
-
-    def save_batch(path: Path, sample: torch.tensor, org_shape) -> None:
-        num_slices = sample.shape[0]
-        shape = sample.shape[-1]
-        crop = tvt.CenterCrop(size=org_shape)
-        sample = crop(sample)
-        numpy_sample = sample.detach().cpu().numpy()
-        for k in range(num_slices):
-            img = numpy_sample[k,0]
-            np.save(path / f"frame{k+1}.npy", img)
-
-    # No augmentation on new dataset 
-    opt = TestOptions().parse()  # get test options
-    opt.name = args.name 
-    opt.netG = args.netG 
-    opt.epoch = args.epoch
-    opt.dataset_type = args.dataset_type
-    target_path = Path(args.data_path) 
-    model = create_model(opt)
-    #model = Pix2PixModel(opt)
-    #model = create_model(opt)
-    model.setup(opt)
-        
-    if opt.eval:
-        model.eval()
-    # Create data normalizer and its inverse
-    scaler = lambda x: x * 2 - 1 
-    inv_scaler = lambda x: (x-x.min())/ (x-x.min()).max()
-    # use the data that haven't been used in training 
-    patient_dict = pickle.load(open('../data/split_dict_ocmr/test_dict.pkl', 'rb'))
-    for i, (patient_id, slices) in enumerate(patient_dict.items()):
-        logger.info(f"Patient No: {i+1}/{len(patient_dict)}")
-        # create gan path 
-        for j, slice_name in enumerate(slices):
-            logger.info(f"Slice No: {j+1}/{len(slices)}")
-            slice_name = slice_name.split(".npy")[0]
-            slice_path = target_path / patient_id / slice_name
-            gan_path = slice_path / "gan_phase"
-            mag_path = slice_path / "gt_mag"
-            phase_path = slice_path / "gt_phase"
-            gan_path.mkdir(parents=False, exist_ok=True)
-            mag_batch, phase_batch, smp_shape = get_batch(mag_path, phase_path)
-            mag_batch = scaler(mag_batch.to("cuda:0"))
-            phase_batch = scaler(phase_batch.to("cuda:0"))
-            # Generate synthetic phase images and save them 
-            model.set_input((mag_batch, phase_batch))
-            model.forward()
-            fake_batch = model.fake_B
-
-            # Save the sample 
-            save_batch(gan_path, fake_batch, smp_shape)
-            logger.info("-"*20)
-        logger.info("#"*20)
-    logger.info("Synthetic phase images were generated succesfully!")  
-
 
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_path", default="../OCMR/ocmr_recon_data", type=str, help="")
-    parser.add_argument("--dataset_type", default="knee", choices=("knee", "cardiac", "ocmr", "brain"), help="type of the dataset to gen. phase map")
+    parser.add_argument("--data_path", default=None, type=str, help="")
+    parser.add_argument("--dataset_type", default="knee", choices=("knee", "brain"), help="type of the dataset to gen. phase map")
     parser.add_argument('--name', type=str, default='knee_exp_e4_256', help='name of the experiment. It decides where to store samples and models')
     parser.add_argument('--netG', type=str, default='unet_256', help='specify generator architecture [resnet_9blocks | resnet_6blocks | unet_256 | unet_128]')
     parser.add_argument('--epoch', type=str, default='90', help='which epoch to load? set to latest to use latest cached model')
@@ -390,12 +304,7 @@ if __name__ == "__main__":
     torch.autograd.set_detect_anomaly(True)
 
     logging.basicConfig(level=logging.INFO)
-    if args.dataset_type == "cardiac":
-        test_dict = pickle.load(open('../data/split_dict/test_dict.pkl', 'rb'))
-        dataset = CardiacDataset(data_dict=test_dict)
-        dataset.augmentation = False 
-        generate_synthetic_phase(dataset, logging)
-    elif args.dataset_type == "knee":
+    if args.dataset_type == "knee":
         with open('../KneeMRI/rec_train_val_test_dicts/train_dict.pkl', 'rb') as file:
             patient_dict = pickle.load(file)
             file.close()
@@ -408,6 +317,3 @@ if __name__ == "__main__":
             file.close()
         save_dir = Path("../BrainMRI/gen_test_data")
         generate_synthetic_phase_brain(patient_dict, args, logging, save_dir)
-    elif args.dataset_type == "ocmr":
-        generate_synthetic_phase_ocmr(args)
-        print("good job")
