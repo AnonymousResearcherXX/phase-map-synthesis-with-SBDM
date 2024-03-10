@@ -31,7 +31,7 @@ import torch
 import random
 import numpy as np 
 import sys 
-from datasets import CardiacDataset, FastMRIKneeDataset, OCMRDataset, FastMRIBrainDataset
+from datasets import FastMRIKneeDataset, FastMRIBrainDataset
 from torch.utils.data import DataLoader
 import pickle 
 from torch.utils.tensorboard import SummaryWriter
@@ -51,11 +51,7 @@ if __name__ == '__main__':
     torch.autograd.set_detect_anomaly(True)
 
     opt = TrainOptions().parse()   # get training options
-    if opt.dataset_type == 'cardiac':
-        train_dict = pickle.load(open("../data/split_dict_cardiac/train_dict.pkl", 'rb'))
-        train_data = CardiacDataset(data_dict=train_dict)  # create a dataset given opt.dataset_mode and other options
-        train_data.augmentation=True
-    elif opt.dataset_type == 'knee':
+    if opt.dataset_type == 'knee':
         # load the dictionary files for train-val-test split 
         train_data = FastMRIKneeDataset(data_path="../KneeMRI/singlecoil_kspace_train", select_size=-1, patient_dict="../KneeMRI/gen_train_val_test_dicts/train_dict.pkl")
         val_data = FastMRIKneeDataset(data_path="../KneeMRI/singlecoil_kspace_train", select_size=-1, patient_dict="../KneeMRI/gen_train_val_test_dicts/val_dict.pkl")
@@ -68,10 +64,6 @@ if __name__ == '__main__':
         print("Val dict len:", len(val_data.data_dict), "patients")
         print("Train data size:", len(train_data), "slices")
         print("Val data size:", len(val_data), "slices")
-    elif opt.dataset_type == "ocmr":
-        train_dict = pickle.load(open("../data/split_dict_ocmr/train_dict.pkl", 'rb'))
-        data_path = Path("./OCMR/singlecoil_ocmr")
-        train_data = OCMRDataset(train_dict, data_path, test=False)
     else:
         raise ValueError("Invalid dataset type.")
     # create dataloaders 
