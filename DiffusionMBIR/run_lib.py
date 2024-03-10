@@ -50,7 +50,6 @@ def train(config, workdir, logging, train_dl, test_dl, seed):
     workdir: Working directory for checkpoints and TF summaries. If this
       contains checkpoint training will be resumed from the latest checkpoint.
   """
-  #val_idx_on = True if config.data.type == "ocmr" else False 
 
   # Create directories for experimental logs
   sample_dir = os.path.join(workdir, "samples")
@@ -122,11 +121,6 @@ def train(config, workdir, logging, train_dl, test_dl, seed):
     logging.info('=================================================')
 
     for step, (mag_img, phase_img) in enumerate(train_dl, start=1):
-      if config.data.type in ("ocmr"):
-        mag_img = torch.permute(mag_img, (1, 0, 2, 3))
-        phase_img = torch.permute(phase_img, (1, 0, 2, 3))
-        config.data.image_size = mag_img.shape[2]
-      
       mag_img = scaler(mag_img.to(config.device))
       phase_img = scaler(phase_img.to(config.device))
       # Execute one training step
@@ -160,10 +154,6 @@ def train(config, workdir, logging, train_dl, test_dl, seed):
       #  (mag_batch, phase_batch) = train_dl.dataset.get_val_scan(test_dl, seed)
       #else:
       (mag_batch, phase_batch) = test_dl.dataset.random_scan(seed) #  + 2
-      if config.data.type in ("ocmr"): # fastmri_brain
-        mag_batch = mag_batch.unsqueeze(dim=1)
-        phase_batch = phase_batch.unsqueeze(dim=1)
-        config.data.image_size = mag_batch.shape[2]
 
       # Building the sampling function
       sampling_shape = (mag_batch.shape[0], config.data.num_channels - 1,
