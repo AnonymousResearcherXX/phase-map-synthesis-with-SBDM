@@ -135,16 +135,7 @@ class VarNetModule(L.LightningModule):
 
     def training_step(self, batch, batch_idx):
         if self.single_coil:
-            if self.dataset_type in ("knee", "brain"):
-                masked_kspace, mask, num_low_frequencies, target = batch
-            elif self.dataset_type == "ocmr": # varnet model for cardiac data 
-                masked_kspace, mask, num_low_frequencies, target = batch   
-                mask = mask.squeeze(dim=0)
-                masked_kspace = masked_kspace.squeeze(dim=0)
-                target = target.squeeze(dim=0)
-            elif self.dataset_type == "cardiac":
-                masked_kspace, mask, num_low_frequencies, target = batch  
-                mask = mask.unsqueeze(dim=1)
+            masked_kspace, mask, num_low_frequencies, target = batch
             output = self.forward(masked_kspace, mask, num_low_frequencies)
             # calculate SSIM loss
             max_vals = torch.max(torch.max(target, dim=-1)[0], dim=-1)[0]
@@ -156,17 +147,7 @@ class VarNetModule(L.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         batch_size = batch[-1].shape[0]
-        if self.dataset_type in ("knee", "brain"): 
-            masked_kspace, mask, num_low_frequencies, target = batch
-        elif self.dataset_type == "ocmr": # varnet model for cardiac data 
-            masked_kspace, mask, num_low_frequencies, target = batch
-            masked_kspace = masked_kspace.squeeze(dim=0)
-            target = target.squeeze(dim=0)
-            mask = mask.squeeze(dim=0)
-            #target = fastmri.complex_abs(target).unsqueeze(dim=1)
-        elif self.dataset_type == "cardiac":
-            masked_kspace, mask, num_low_frequencies, target = batch   
-            mask = mask.unsqueeze(dim=1)
+        masked_kspace, mask, num_low_frequencies, target = batch
         # forward pass
         output = self.forward(masked_kspace, mask, num_low_frequencies)
         # calculate SSIM loss
@@ -226,17 +207,7 @@ class VarNetModule(L.LightningModule):
     def test_step(self, batch, batch_idx):
         #return None # YOU NEED TO PUT THIS FOR MODE='test_all'
         batch_size = batch[-1].shape[0]
-        if self.dataset_type in ("knee", "brain"): 
-            masked_kspace, mask, num_low_frequencies, target = batch
-        elif self.dataset_type == "ocmr": # varnet model for cardiac data 
-            masked_kspace, mask, num_low_frequencies, target = batch
-            masked_kspace = masked_kspace.squeeze(dim=0)
-            target = target.squeeze(dim=0)
-            mask = mask.squeeze(dim=0)
-            #target = fastmri.complex_abs(target).unsqueeze(dim=1)
-        elif self.dataset_type == "cardiac":
-            masked_kspace, mask, num_low_frequencies, target = batch   
-            mask = mask.unsqueeze(dim=1)
+        masked_kspace, mask, num_low_frequencies, target = batch
         # forward pass
         us_mag = fastmri.complex_abs(fastmri.ifft2c(masked_kspace))
         output = us_mag
@@ -273,19 +244,12 @@ class VarNetModule(L.LightningModule):
 
 
     def predict_step(self, batch, dataloader_idx=5, scan_name=None, test=False):
-        if self.dataset_type in ("knee", "brain"):
-            masked_kspace, mask, num_low_frequencies, target = batch 
-            idx2 = target.shape[0] // 2
-            idxs = [idx2 - 5, idx2, idx2 + 3]
-            target = target[idxs].to(self.device)
-            mask = mask[idxs].to(self.device)
-            masked_kspace = masked_kspace[idxs].to(self.device)
-        elif self.dataset_type == "ocmr":
-            masked_kspace = masked_kspace.squeeze(dim=0)
-            mask = mask.squeeze(dim=0)
-            target = target.squeeze(dim=0)
-        elif self.dataset_type == "cardiac":
-            mask = mask.unsqueeze(dim=1)
+        masked_kspace, mask, num_low_frequencies, target = batch 
+        idx2 = target.shape[0] // 2
+        idxs = [idx2 - 5, idx2, idx2 + 3]
+        target = target[idxs].to(self.device)
+        mask = mask[idxs].to(self.device)
+        masked_kspace = masked_kspace[idxs].to(self.device)
         # forward pass
         output = self.forward(masked_kspace, mask, num_low_frequencies)
         us_mag = fastmri.complex_abs(fastmri.ifft2c(masked_kspace))
@@ -395,97 +359,6 @@ class VarNetModule(L.LightningModule):
         save_path.mkdir(exist_ok=True, parents=True)
         plt.savefig(save_path / f"recon_epoch{self.current_epoch}", transparent=True, bbox_inches="tight") 
         plt.close()
-
-    def display_preds(
-        self,
-        masked_kspace: torch.Tensor,
-        output: torch.Tensor,
-        ground_truth: torch.Tensor,
-        idx: int, 
-        nrmse_recon: float, 
-        nrmse_us: float,
-        ssim_recon: float,
-        ssim_us: float
-    ):
-        scan_name = self.args.pred_path.parts[-2]
-        scan_dir = self.args.display_path / scan_name / f"frame{idx}" 
-        scan_dir.mkdir(parents=True, exist_ok=True)
-        undersampled_mag = fastmri.complex_abs(fftc.ifft2c_new(masked_kspace))
-        # calculate error maps
-        normalizer = lambda x : ( x - x.min() ) / (x.max() - x.min())
-        output = normalizer(output)
-        ground_truth = normalizer(ground_truth)
-        undersampled_mag = normalizer(undersampled_mag)
-        err_map = lambda pred, target: torch.abs(pred - target)
-        output = F.hflip(output)
-        ground_truth = F.hflip(ground_truth)
-        undersampled_mag = F.hflip(undersampled_mag)
-        pred_err = err_map(output, ground_truth)
-        undersamp_err = err_map(undersampled_mag, ground_truth)
-        # change cmap 
-        save_image(ground_truth[idx], fp=scan_dir / "ground_truth.png", nrow=1)
-        max, min = 1, 0
-        # NEW IMAGE 
-        # Plot reconstruction error map 
-        fig, ax = plt.subplots()
-        im = ax.imshow(pred_err[idx,0].cpu().numpy() * 1.5, cmap='gray')
-        ax.set_xticks([])
-        ax.set_yticks([])
-        pos = (.97, .03)
-        #ax.text(pos[0], pos[1], f"{nrmse_recon * 100:.1f}%", transform=ax.transAxes, fontsize=36, weight='black', ha='right', va='bottom', color='yellow')
-        plt.savefig(str(scan_dir / f"{self.args.phase_type}_err.png"), transparent=True)
-        plt.show()
-        plt.close()
-        # NEW IMAGE 
-        fig, ax = plt.subplots()
-        # Plot undersampled error map with 
-        im = ax.imshow(undersamp_err[idx,0].cpu().numpy() * 1.5, cmap='gray')
-        ax.set_xticks([])
-        ax.set_yticks([])
-        #fig.colorbar(im, ax=ax)
-        pos = (.97, .03)
-        #ax.text(pos[0], pos[1], f"{nrmse_us * 100:.1f}%", transform=ax.transAxes, fontsize=36, weight='black', ha='right', va='bottom', color='yellow')
-        plt.savefig(str(scan_dir / "undsamp_err.png"), transparent=True)
-        plt.show()
-        plt.close()
-        # NEW IMAGE 
-        fig, ax = plt.subplots()
-        # Plot reconstruction image with NRMSE %
-        recon = output[idx, 0].cpu().numpy()
-        im = ax.imshow(recon, cmap="gray")
-        ax.set_xticks([])
-        ax.set_yticks([])
-        #fig.colorbar(im, ax=ax)
-        pos = (.03, .03)
-        ax.text(pos[0], pos[1], f"NRMSE: {nrmse_recon:.3f}\nSSIM: {ssim_recon:.3f}", transform=ax.transAxes, fontsize=20, weight='semibold', ha='left', va='bottom', color='white')
-        plt.savefig(str(scan_dir / f"{self.args.phase_type}_recon.png"), transparent=True)
-        plt.show()
-        plt.close()
-        fig, ax = plt.subplots()
-        # Plot undersampled image with NMSE %
-        us_mag = undersampled_mag[idx, 0].cpu().numpy()
-        im = ax.imshow(us_mag, cmap="gray")
-        ax.set_xticks([])
-        ax.set_yticks([])
-        #fig.colorbar(im, ax=ax)
-        pos = (.03, .03) #.97 .03
-        ax.text(pos[0], pos[1], f"NRMSE: {nrmse_us:.3f}\nSSIM: {ssim_us:.3f}", transform=ax.transAxes, fontsize=20, weight='semibold', ha='left', va='bottom', color='white')
-        plt.savefig(str(scan_dir / "us_mag.png"), transparent=True)
-        plt.show()
-        plt.close()
-
-        fig, ax = plt.subplots()
-        # save the phase to the target folder
-        if self.args.phase_type in ("gt_phase", "diff_phase", "gan_phase"):
-            phase_path = Path("../OCMR/ocmr_recon_data") / scan_name / self.args.pred_path.name / self.args.phase_type / f"frame{idx}.npy"
-            img = np.load(phase_path)
-            img = (img - np.min(img)) / (np.max(img) - np.min(img))
-            im = ax.imshow(np.flip(img, axis=1), cmap='gray')
-            ax.set_xticks([])
-            ax.set_yticks([])
-            plt.savefig(str(scan_dir / f"{self.args.phase_type}"), transparent=True)
-            plt.show()
-            plt.close()
 
 
     @staticmethod
